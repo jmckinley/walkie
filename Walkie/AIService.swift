@@ -69,6 +69,13 @@ enum AIProvider: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - AIResponse
+
+struct AIResponse {
+    let text: String       // always present — used for history and display
+    let audioData: Data?   // PCM audio from Gemini TTS; nil → route through SpeechManager
+}
+
 // MARK: - Message (shared model)
 
 struct Message: Codable, Identifiable, Equatable, Hashable, Sendable {
@@ -174,7 +181,7 @@ final class AIService: ObservableObject {
 
     // MARK: - Send
 
-    func send(text: String, history: [Message]) async -> String? {
+    func send(text: String, history: [Message]) async -> AIResponse? {
         isThinking = true
         errorMessage = nil
         defer { isThinking = false }
@@ -207,7 +214,8 @@ final class AIService: ObservableObject {
 
             let result = await TierManager.shared.sendViaProxy(messages: messages)
             switch result {
-            case .success(let reply):  return reply
+            case .success(let (text, audioData)):
+                return AIResponse(text: text, audioData: audioData)
             case .failure(let error):
                 errorMessage = error.localizedDescription
                 return nil
@@ -229,10 +237,17 @@ final class AIService: ObservableObject {
         }
 
         switch activeProvider {
-        case .claude: return await sendClaude(text: text, history: history)
-        case .openai: return await sendOpenAI(text: text, history: history)
-        case .gemini: return await sendGemini(text: text, history: history)
-        case .grok:   return await sendGrok(text: text, history: history)
+        case .claude:
+            guard let t = await sendClaude(text: text, history: history) else { return nil }
+            return AIResponse(text: t, audioData: nil)
+        case .openai:
+            guard let t = await sendOpenAI(text: text, history: history) else { return nil }
+            return AIResponse(text: t, audioData: nil)
+        case .gemini:
+            return await sendGeminiWithAudio(text: text, history: history)
+        case .grok:
+            guard let t = await sendGrok(text: text, history: history) else { return nil }
+            return AIResponse(text: t, audioData: nil)
         }
     }
 
@@ -453,6 +468,53 @@ final class AIService: ObservableObject {
             return message?["content"] as? String
         } catch {
             errorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    // MARK: - Gemini with audio (two-step: text via 2.0 Flash + search, audio via 2.5 Flash TTS)
+
+    private func sendGeminiWithAudio(text: String, history: [Message]) async -> AIResponse? {
+        guard let textReply = await sendGemini(text: text, history: history) else { return nil }
+        let audioData = await sendGeminiAudio(textReply)
+        return AIResponse(text: textReply, audioData: audioData)
+    }
+
+    private func sendGeminiAudio(_ text: String) async -> Data? {
+        let urlStr = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        guard let url = URL(string: urlStr) else { return nil }
+
+        let body: [String: Any] = [
+            "contents": [
+                ["role": "user", "parts": [["text": "Say this naturally and conversationally: \(text)"]]]
+            ],
+            "generationConfig": [
+                "responseModalities": ["AUDIO"],
+                "speechConfig": [
+                    "voiceConfig": [
+                        "prebuiltVoiceConfig": ["voiceName": "Charon"]
+                    ]
+                ]
+            ] as [String: Any]
+        ]
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(geminiKey,          forHTTPHeaderField: "x-goog-api-key")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+            let json       = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let candidates = json?["candidates"]  as? [[String: Any]]
+            let content    = candidates?.first?["content"] as? [String: Any]
+            let parts      = content?["parts"]    as? [[String: Any]]
+            let inlineData = parts?.first?["inlineData"] as? [String: Any]
+            guard let b64  = inlineData?["data"]  as? String else { return nil }
+            return Data(base64Encoded: b64)
+        } catch {
             return nil
         }
     }

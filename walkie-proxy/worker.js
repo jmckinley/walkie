@@ -14,8 +14,10 @@ const TRIAL_DAYS           = 60;
 const FREE_DAILY_LIMIT     = 10;
 const PAID_MONTHLY_LIMIT   = 200;   // $3.99/mo
 const PAID_ANNUAL_LIMIT    = 200;   // $24.99/yr — same daily limit, better value framing
-const GEMINI_MODEL         = "gemini-2.0-flash";        // flash (not lite) required for search grounding
+const GEMINI_MODEL         = "gemini-2.0-flash";        // flash required for search grounding
+const GEMINI_AUDIO_MODEL   = "gemini-2.5-flash";        // 2.5 Flash required for native audio output
 const GEMINI_ENDPOINT      = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+const GEMINI_AUDIO_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_AUDIO_MODEL}:generateContent`;
 
 // ─── Main handler ────────────────────────────────────────────────────────────
 
@@ -143,8 +145,21 @@ async function handleChat(request, env) {
   const geminiData = await geminiResponse.json();
   const text = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
 
+  // Generate high-quality audio from the text response (Gemini 2.5 Flash TTS)
+  let audioBase64   = null;
+  let audioMimeType = null;
+  if (text) {
+    const audioResult = await callGeminiAudio(text, env);
+    if (audioResult) {
+      audioBase64   = audioResult.data;
+      audioMimeType = audioResult.mimeType;
+    }
+  }
+
   return corsResponse(json({
     text,
+    audio:         audioBase64,
+    audioMimeType: audioMimeType,
     usage: {
       tier:          status.tier,
       requestsToday: status.requestsToday + 1,
@@ -186,6 +201,42 @@ async function callGemini(messages, env) {
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify(body),
   });
+}
+
+// ─── Gemini TTS audio call ────────────────────────────────────────────────────
+// Converts AI text response to high-quality speech via Gemini 2.5 Flash audio modality.
+// Returns { data: base64PCM, mimeType } or null on failure (caller falls back to device TTS).
+
+async function callGeminiAudio(text, env) {
+  const body = {
+    contents: [{
+      role:  "user",
+      parts: [{ text: `Say this naturally and conversationally: ${text}` }]
+    }],
+    generationConfig: {
+      responseModalities: ["AUDIO"],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: { voiceName: "Charon" }
+        }
+      }
+    }
+  };
+
+  try {
+    const res = await fetch(`${GEMINI_AUDIO_ENDPOINT}?key=${env.GEMINI_API_KEY}`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    const data       = await res.json();
+    const inlineData = data?.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+    if (!inlineData?.data) return null;
+    return { data: inlineData.data, mimeType: inlineData.mimeType ?? "audio/pcm;rate=24000" };
+  } catch {
+    return null;
+  }
 }
 
 // ─── Tier / rate limit logic ──────────────────────────────────────────────────

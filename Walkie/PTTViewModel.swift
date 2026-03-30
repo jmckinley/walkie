@@ -104,17 +104,24 @@ final class PTTViewModel: ObservableObject {
         state = .thinking
         transcript = text
 
-        let reply = await ai.send(text: text, history: history)
+        let response = await ai.send(text: text, history: history)
 
-        if let reply {
+        if let response {
             // Only commit to history on success — keeps history balanced
             history.append(Message(role: "user",      content: text))
-            history.append(Message(role: "assistant", content: reply))
+            history.append(Message(role: "assistant", content: response.text))
             // Keep history bounded to 20 messages (10 pairs) to avoid context-window overflow
             if history.count > 20 { history = Array(history.dropFirst(history.count - 20)) }
-            lastResponse = reply
+            lastResponse = response.text
             saveHistory()
-            speech.speak(reply)
+
+            if let audioData = response.audioData {
+                // Gemini 2.5 Flash native audio — play PCM directly
+                speech.playAudio(audioData)
+            } else {
+                // Claude / OpenAI / Grok — route through SpeechManager (OpenAI TTS or Apple TTS)
+                speech.speak(response.text)
+            }
         } else {
             // AI failed — leave history unchanged, return to idle
             state = .idle

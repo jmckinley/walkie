@@ -98,7 +98,7 @@ final class TierManager: ObservableObject {
 
     // MARK: - Send via proxy (free trial + paid shared)
 
-    func sendViaProxy(messages: [[String: String]]) async -> Result<String, Error> {
+    func sendViaProxy(messages: [[String: String]]) async -> Result<(text: String, audioData: Data?), Error> {
         guard !PROXY_BASE_URL.contains("YOUR_SUBDOMAIN") else {
             return .failure(WalkieError.config("Proxy not configured. Add an API key in ⚙ Settings to use your own account."))
         }
@@ -145,7 +145,8 @@ final class TierManager: ObservableObject {
                 dailyLimit    = usage.dailyLimit
             }
 
-            return .success(result.text)
+            let audioData = result.audio.flatMap { Data(base64Encoded: $0) }
+            return .success((text: result.text, audioData: audioData))
         } catch {
             return .failure(error)
         }
@@ -235,6 +236,8 @@ private struct ProxyError: Codable {
 
 private struct ProxyChatResponse: Codable {
     let text: String
+    let audio: String?          // base64-encoded PCM from Gemini 2.5 Flash TTS
+    let audioMimeType: String?  // e.g. "audio/pcm;rate=24000"
     let usage: ProxyUsage?
 }
 

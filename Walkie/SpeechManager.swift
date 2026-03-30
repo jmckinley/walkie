@@ -146,6 +146,61 @@ final class SpeechManager: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - Gemini PCM Audio Playback
+
+    /// Play raw PCM audio returned by Gemini 2.5 Flash TTS.
+    /// Wraps the PCM in a WAV header so AVAudioPlayer can decode it.
+    func playAudio(_ pcmData: Data) {
+        synthesizer.stopSpeaking(at: .immediate)
+        audioPlayer?.stop()
+        audioPlayer = nil
+
+        let wavData = pcmToWAV(pcmData)
+        do {
+            let player = try AVAudioPlayer(data: wavData)
+            audioPlayer = player
+            player.delegate = self
+            isSpeaking = true
+            player.prepareToPlay()
+            player.play()
+        } catch {
+            print("[SpeechManager] playAudio failed: \(error.localizedDescription)")
+            isSpeaking = false
+        }
+    }
+
+    /// Build a minimal WAV header around raw signed-16-bit mono PCM at 24 kHz.
+    private func pcmToWAV(_ pcmData: Data, sampleRate: UInt32 = 24_000) -> Data {
+        let numChannels: UInt16  = 1
+        let bitsPerSample: UInt16 = 16
+        let byteRate   = sampleRate * UInt32(numChannels) * UInt32(bitsPerSample) / 8
+        let blockAlign = numChannels * bitsPerSample / 8
+        let dataSize   = UInt32(pcmData.count)
+
+        var header = Data()
+
+        func appendLE<T: FixedWidthInteger>(_ v: T) {
+            var le = v.littleEndian
+            withUnsafeBytes(of: &le) { header.append(contentsOf: $0) }
+        }
+
+        header.append(contentsOf: "RIFF".utf8)
+        appendLE(UInt32(36 + dataSize))   // ChunkSize
+        header.append(contentsOf: "WAVE".utf8)
+        header.append(contentsOf: "fmt ".utf8)
+        appendLE(UInt32(16))              // Subchunk1Size (PCM)
+        appendLE(UInt16(1))              // AudioFormat = PCM
+        appendLE(numChannels)
+        appendLE(sampleRate)
+        appendLE(byteRate)
+        appendLE(blockAlign)
+        appendLE(bitsPerSample)
+        header.append(contentsOf: "data".utf8)
+        appendLE(dataSize)
+
+        return header + pcmData
+    }
+
     // MARK: - Text to Speech
 
     func speak(_ text: String) {
