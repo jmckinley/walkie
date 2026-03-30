@@ -126,6 +126,12 @@ final class TierManager: ObservableObject {
                 return .failure(WalkieError.rateLimited(err?.error ?? "Rate limited"))
             }
 
+            // Device not registered — auto-register then retry once
+            if http?.statusCode == 404 {
+                await registerAndRefresh()
+                return await sendViaProxy(messages: messages)
+            }
+
             if http?.statusCode != 200 {
                 let err = try? JSONDecoder().decode(ProxyError.self, from: data)
                 return .failure(WalkieError.api(err?.error ?? "Proxy error \(http?.statusCode ?? 0)"))
