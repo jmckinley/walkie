@@ -187,9 +187,14 @@ final class AIService: ObservableObject {
             return nil
         }
 
+        // If ANY personal key is stored, never touch the proxy regardless of tier state.
+        // This prevents the race where tier hasn't resolved to .byok yet, and also
+        // handles the case where the active provider has no key but another one does.
+        let hasAnyKey = !claudeKey.isEmpty || !openAIKey.isEmpty
+                     || !geminiKey.isEmpty || !grokKey.isEmpty
+
         // Free trial and paid-shared → use proxy (Gemini Flash, pooled key)
-        // Guard with activeKey.isEmpty so BYOK always wins even if tier hasn't resolved yet
-        if (tier == .freeTrial || tier == .paidMonthly || tier == .paidAnnual) && activeKey.isEmpty {
+        if (tier == .freeTrial || tier == .paidMonthly || tier == .paidAnnual) && !hasAnyKey {
             guard TierManager.shared.canSendRequest else {
                 errorMessage = "Daily limit reached (\(TierManager.shared.dailyLimit)/day). Resets at midnight."
                 return nil
@@ -211,7 +216,15 @@ final class AIService: ObservableObject {
 
         // BYOK — use selected provider directly
         guard !activeKey.isEmpty else {
-            errorMessage = "No API key for \(activeProvider.displayName). Open ⚙ Settings."
+            // User has keys for other providers but not this one — tell them which ones work
+            let available = [claudeKey.isEmpty ? nil : "Claude",
+                             openAIKey.isEmpty ? nil : "OpenAI",
+                             geminiKey.isEmpty ? nil : "Gemini",
+                             grokKey.isEmpty   ? nil : "Grok"]
+                            .compactMap { $0 }.joined(separator: " or ")
+            errorMessage = available.isEmpty
+                ? "No API key for \(activeProvider.displayName). Open ⚙ Settings."
+                : "No \(activeProvider.displayName) key. Switch to \(available) in ⚙ Settings."
             return nil
         }
 
