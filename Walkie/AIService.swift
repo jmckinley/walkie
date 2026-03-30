@@ -173,7 +173,7 @@ final class AIService: ObservableObject {
     private init() {
         let saved = UserDefaults.standard.string(forKey: "active_provider") ?? ""
         activeProvider = AIProvider(rawValue: saved) ?? .claude
-        showTextResponse = UserDefaults.standard.bool(forKey: "show_text_response")
+        showTextResponse = UserDefaults.standard.object(forKey: "show_text_response") as? Bool ?? true
         let savedTokens = UserDefaults.standard.integer(forKey: "max_tokens")
         maxTokens = savedTokens > 0 ? savedTokens : 300
         customSystemPrompt = UserDefaults.standard.string(forKey: "custom_system_prompt") ?? ""
