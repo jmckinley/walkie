@@ -188,7 +188,8 @@ final class AIService: ObservableObject {
         }
 
         // Free trial and paid-shared → use proxy (Gemini Flash, pooled key)
-        if tier == .freeTrial || tier == .paidMonthly || tier == .paidAnnual {
+        // Guard with activeKey.isEmpty so BYOK always wins even if tier hasn't resolved yet
+        if (tier == .freeTrial || tier == .paidMonthly || tier == .paidAnnual) && activeKey.isEmpty {
             guard TierManager.shared.canSendRequest else {
                 errorMessage = "Daily limit reached (\(TierManager.shared.dailyLimit)/day). Resets at midnight."
                 return nil
