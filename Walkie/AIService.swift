@@ -239,15 +239,15 @@ final class AIService: ObservableObject {
         switch activeProvider {
         case .claude:
             guard let t = await sendClaude(text: text, history: history) else { return nil }
-            return AIResponse(text: t, audioData: await bestAvailableAudio(t))
+            return AIResponse(text: t, audioData: await generateAudio(t))
         case .openai:
             guard let t = await sendOpenAI(text: text, history: history) else { return nil }
-            return AIResponse(text: t, audioData: nil)   // OpenAI TTS handled in SpeechManager
+            return AIResponse(text: t, audioData: await generateAudio(t))
         case .gemini:
             return await sendGeminiWithAudio(text: text, history: history)
         case .grok:
             guard let t = await sendGrok(text: text, history: history) else { return nil }
-            return AIResponse(text: t, audioData: await bestAvailableAudio(t))
+            return AIResponse(text: t, audioData: await generateAudio(t))
         }
     }
 
@@ -472,13 +472,30 @@ final class AIService: ObservableObject {
         }
     }
 
-    // MARK: - Best available TTS audio (Gemini key → Gemini TTS; else nil → SpeechManager picks up)
+    // MARK: - Gemini TTS for all BYOK users
 
-    /// Returns PCM audio if a Gemini key is available, otherwise nil.
-    /// Claude and Grok users with a Gemini key get Gemini 2.5 Flash voice automatically.
-    private func bestAvailableAudio(_ text: String) async -> Data? {
-        guard !geminiKey.isEmpty else { return nil }
-        return await sendGeminiAudio(text)
+    /// Generates Gemini 2.5 Flash audio for any text, regardless of AI provider.
+    /// Fast path: user's own Gemini key (direct API, no latency overhead).
+    /// Fallback: proxy /v1/tts — app pays, ensures every user gets the same great voice.
+    private func generateAudio(_ text: String) async -> Data? {
+        if !geminiKey.isEmpty {
+            return await sendGeminiAudio(text)
+        }
+        guard let url = URL(string: "\(PROXY_BASE_URL)/v1/tts") else { return nil }
+        let body: [String: Any] = ["text": text, "appSecret": APP_SHARED_SECRET]
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            guard let b64 = json?["audio"] as? String else { return nil }
+            return Data(base64Encoded: b64)
+        } catch {
+            return nil
+        }
     }
 
     // MARK: - Gemini with audio (two-step: text via 2.0 Flash + search, audio via 2.5 Flash TTS)

@@ -39,6 +39,7 @@ export default {
         case "/v1/chat":     return await handleChat(request, env);
         case "/v1/register": return await handleRegister(request, env);
         case "/v1/status":   return await handleStatus(request, env);
+        case "/v1/tts":      return await handleTTS(request, env);
         default:             return corsResponse(new Response("Not found", { status: 404 }));
       }
     } catch (err) {
@@ -201,6 +202,32 @@ async function callGemini(messages, env) {
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify(body),
   });
+}
+
+// ─── TTS endpoint (BYOK users without a Gemini key) ──────────────────────────
+// POST /v1/tts { appSecret, text } → { audio: base64PCM, audioMimeType }
+// No per-device rate limiting — protected by appSecret only.
+
+async function handleTTS(request, env) {
+  const body = await request.json();
+  const { text, appSecret } = body;
+
+  if (appSecret !== env.WALKIE_SHARED_SECRET) {
+    return corsResponse(json({ error: "Unauthorized" }, 401));
+  }
+  if (!text || typeof text !== "string" || text.length > 2000) {
+    return corsResponse(json({ error: "Invalid text" }, 400));
+  }
+
+  const audioResult = await callGeminiAudio(text, env);
+  if (!audioResult) {
+    return corsResponse(json({ error: "TTS generation failed" }, 502));
+  }
+
+  return corsResponse(json({
+    audio:         audioResult.data,
+    audioMimeType: audioResult.mimeType,
+  }));
 }
 
 // ─── Gemini TTS audio call ────────────────────────────────────────────────────

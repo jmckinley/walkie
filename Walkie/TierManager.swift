@@ -19,10 +19,9 @@ enum WalkieTier: String, Codable, Equatable {
 }
 
 // MARK: - Proxy config
-// Replace with your Cloudflare Worker URL after deploying
 
-private let PROXY_BASE_URL    = "https://walkie-proxy.john-40d.workers.dev"
-private let APP_SHARED_SECRET = "d874600c82354108bf3600cd24e103d58f72f00a87ba45a69091ed1f4eeb44ac"
+let PROXY_BASE_URL    = "https://walkie-proxy.john-40d.workers.dev"
+let APP_SHARED_SECRET = "d874600c82354108bf3600cd24e103d58f72f00a87ba45a69091ed1f4eeb44ac"
 
 // MARK: - TierStatus (mirrors proxy response)
 
