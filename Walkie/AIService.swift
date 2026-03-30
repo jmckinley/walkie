@@ -239,15 +239,15 @@ final class AIService: ObservableObject {
         switch activeProvider {
         case .claude:
             guard let t = await sendClaude(text: text, history: history) else { return nil }
-            return AIResponse(text: t, audioData: nil)
+            return AIResponse(text: t, audioData: await bestAvailableAudio(t))
         case .openai:
             guard let t = await sendOpenAI(text: text, history: history) else { return nil }
-            return AIResponse(text: t, audioData: nil)
+            return AIResponse(text: t, audioData: nil)   // OpenAI TTS handled in SpeechManager
         case .gemini:
             return await sendGeminiWithAudio(text: text, history: history)
         case .grok:
             guard let t = await sendGrok(text: text, history: history) else { return nil }
-            return AIResponse(text: t, audioData: nil)
+            return AIResponse(text: t, audioData: await bestAvailableAudio(t))
         }
     }
 
@@ -470,6 +470,15 @@ final class AIService: ObservableObject {
             errorMessage = error.localizedDescription
             return nil
         }
+    }
+
+    // MARK: - Best available TTS audio (Gemini key → Gemini TTS; else nil → SpeechManager picks up)
+
+    /// Returns PCM audio if a Gemini key is available, otherwise nil.
+    /// Claude and Grok users with a Gemini key get Gemini 2.5 Flash voice automatically.
+    private func bestAvailableAudio(_ text: String) async -> Data? {
+        guard !geminiKey.isEmpty else { return nil }
+        return await sendGeminiAudio(text)
     }
 
     // MARK: - Gemini with audio (two-step: text via 2.0 Flash + search, audio via 2.5 Flash TTS)

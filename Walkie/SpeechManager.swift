@@ -212,8 +212,11 @@ final class SpeechManager: NSObject, ObservableObject {
         audioPlayer?.stop()
         audioPlayer = nil
 
-        let useOpenAI = UserDefaults.standard.bool(forKey: "use_openai_tts")
-            && !KeychainManager.load(.openAIAPIKey).isEmpty
+        // Use OpenAI TTS automatically if a key exists, unless the user explicitly disabled it.
+        // (Opt-out: nil preference = enabled; false = disabled by user.)
+        let openAIKey  = KeychainManager.load(.openAIAPIKey)
+        let openAIPref = UserDefaults.standard.object(forKey: "use_openai_tts") as? Bool
+        let useOpenAI  = !openAIKey.isEmpty && (openAIPref ?? true)
 
         if useOpenAI {
             isSpeaking = true
