@@ -10,7 +10,7 @@
 //   wrangler kv:namespace create WALKIE_RATE_LIMITS
 //   Add to wrangler.toml: [[kv_namespaces]] binding="WALKIE_RATE_LIMITS" id="<id>"
 
-const TRIAL_DAYS           = 7;
+const TRIAL_DAYS           = 60;
 const FREE_DAILY_LIMIT     = 10;
 const PAID_MONTHLY_LIMIT   = 200;   // $3.99/mo
 const PAID_ANNUAL_LIMIT    = 200;   // $24.99/yr — same daily limit, better value framing
