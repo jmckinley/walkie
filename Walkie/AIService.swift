@@ -240,37 +240,87 @@ final class AIService: ObservableObject {
 
     private func sendClaude(text: String, history: [Message]) async -> String? {
         let url = URL(string: "https://api.anthropic.com/v1/messages")!
-        let messages = history.map { ["role": $0.role, "content": $0.content] }
-                     + [["role": "user", "content": text]]
 
-        let body: [String: Any] = [
-            "model":      AIProvider.claude.modelLabel,
-            "max_tokens": maxTokens,
-            "system":     systemPrompt,
-            "messages":   messages
-        ]
+        // Seed messages as Any to support both String content (normal turns)
+        // and Array content (tool_result turns in the agentic search loop)
+        var messages: [[String: Any]] = history.map { ["role": $0.role, "content": $0.content] }
+        messages.append(["role": "user", "content": text])
 
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue(claudeKey,          forHTTPHeaderField: "x-api-key")
-        req.setValue("2023-06-01",       forHTTPHeaderField: "anthropic-version")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        let webSearch: [String: Any] = ["type": "web_search_20250305",
+                                        "name": "web_search",
+                                        "max_uses": 5]
 
-        do {
-            let (data, response) = try await URLSession.shared.data(for: req)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                let msg = String(data: data, encoding: .utf8) ?? "unknown"
-                errorMessage = "Claude error: \(msg.prefix(120))"
+        // Agentic loop — runs at most 6 turns to resolve tool_use (web search) calls
+        for _ in 0..<6 {
+            let body: [String: Any] = [
+                "model":      AIProvider.claude.modelLabel,
+                "max_tokens": maxTokens,
+                "system":     systemPrompt,
+                "tools":      [webSearch],
+                "messages":   messages
+            ]
+
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.setValue(claudeKey,          forHTTPHeaderField: "x-api-key")
+            req.setValue("2023-06-01",       forHTTPHeaderField: "anthropic-version")
+            req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: req)
+                guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                    let msg = String(data: data, encoding: .utf8) ?? "unknown"
+                    errorMessage = "Claude error: \(msg.prefix(120))"
+                    return nil
+                }
+                guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return nil
+                }
+
+                let stopReason    = json["stop_reason"] as? String ?? "end_turn"
+                let contentBlocks = json["content"]    as? [[String: Any]] ?? []
+
+                // Collect all text fragments (skip tool_use / tool_result blocks)
+                let textOut = contentBlocks
+                    .filter { $0["type"] as? String == "text" }
+                    .compactMap { $0["text"] as? String }
+                    .joined()
+
+                if stopReason == "end_turn" {
+                    return textOut.isEmpty ? nil : textOut
+                }
+
+                // Claude wants to search — append its turn, then return tool results
+                if stopReason == "tool_use" {
+                    messages.append(["role": "assistant", "content": contentBlocks])
+
+                    let toolResults: [[String: Any]] = contentBlocks
+                        .filter { $0["type"] as? String == "tool_use" }
+                        .compactMap { block -> [String: Any]? in
+                            guard let toolId = block["id"] as? String else { return nil }
+                            // web_search_20250305 is server-side: Anthropic executes the
+                            // search; we acknowledge with an empty content block so the
+                            // loop continues and Claude receives the results.
+                            return ["type": "tool_result", "tool_use_id": toolId, "content": ""]
+                        }
+
+                    if !toolResults.isEmpty {
+                        messages.append(["role": "user", "content": toolResults])
+                    }
+                    continue
+                }
+
+                return textOut.isEmpty ? nil : textOut
+
+            } catch {
+                errorMessage = error.localizedDescription
                 return nil
             }
-            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            let content = (json?["content"] as? [[String: Any]])?.first
-            return content?["text"] as? String
-        } catch {
-            errorMessage = error.localizedDescription
-            return nil
         }
+
+        errorMessage = "Claude search timed out. Try again."
+        return nil
     }
 
     // MARK: - OpenAI
